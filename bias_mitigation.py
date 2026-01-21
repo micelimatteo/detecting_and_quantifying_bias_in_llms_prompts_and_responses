@@ -1,6 +1,6 @@
 from utils import generate_llm_response 
 
-def sanitize_prompt(prompt: str, biases: Dict) -> str:
+def sanitize_prompt(prompt: str, biases: dict) -> str:
     """
     Sanitize the prompt by removing or replacing any problematic phrases
     identified in the bias detection step.
