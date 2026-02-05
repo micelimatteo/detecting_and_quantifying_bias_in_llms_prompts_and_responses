@@ -7,6 +7,8 @@ from transformers import BertTokenizer
 from detoxify import Detoxify
 import json
 
+
+#HateBERT fine-tuned on ToxicGen dataset
 def identify_implicit_toxicity_biases(phrase):
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     model_name = "tomh/toxigen_hatebert"
@@ -28,6 +30,7 @@ def identify_general_toxicity_biases(phrase):
     return detox_result
 
 
+# Identify cognitive biases in prompt or response
 def identify_cognitive_biases(phrase, is_prompt):
     """Detect bias-inducing patterns in user prompt"""
     
@@ -84,7 +87,7 @@ def identify_cognitive_biases(phrase, is_prompt):
     return biases
 
 
-#returns the only bias that would be displayed to the user
+#Returns the only bias that would be displayed to the user
 def aggregate_biases(biases: list, phrase: str) -> tuple:
     bias = {}
     with open('params.json', 'r') as f:
@@ -93,28 +96,35 @@ def aggregate_biases(biases: list, phrase: str) -> tuple:
     detoxify_threshold = params.get("detoxify_threshold", 0.5)
     subjectivity_threshold = params.get("subjectivity_threshold", 0.5)
 
-    if biases["toxicity_bias"]["severity"] >= toxigen_threshold:
-        bias = {"toxicity_bias": biases["toxicity_bias"]}
-        bias_type = "toxicity_bias"
-        return bias, bias_type
-    elif biases["detoxify_bias"]["severity"] >= detoxify_threshold:
-        bias = {"detoxify_bias": biases["detoxify_bias"]}
-        bias_type = "detoxify_bias"
-        return bias, bias_type
-    for cb in biases["cognitive_biases"]:
-        for bias_name, info in cb.items():
-            if bias_name not in bias and biases["toxicity_bias"] == True:
-                bias = {bias_name: info}
-                bias_type = bias_name
-    if bias:
-        return bias, bias_type
-    elif "subjectivity_bias" in biases and biases["subjectivity_bias"]["severity"] >= subjectivity_threshold:
-        bias = {"subjectivity_bias": biases["subjectivity_bias"]}
-        bias_type = "subjectivity_bias"
-        return bias, bias_type
-    else:
-        return {}, None
-    
+    # Safe check: ensure keys exist before accessing them
+    if "toxicity_bias" in biases:
+        tb = biases["toxicity_bias"]
+        if tb.get("present") and tb.get("severity", 0) >= toxigen_threshold:
+            return {"toxicity_bias": tb}, "toxicity_bias"
+
+    # Find any detoxify_* bias that meets the threshold
+    for k, v in biases.items():
+        if k.startswith("detoxify_") and isinstance(v, dict):
+            if v.get("present") and v.get("severity", 0) >= detoxify_threshold:
+                return {k: v}, k
+
+    # If there are cognitive biases listed, prefer them (check presence first, before subjectivity threshold)
+    if "toxicity_bias" in biases:
+        for cb in biases.get("cognitive_biases", []):
+            if isinstance(cb, dict):
+                for bias_name, info in cb.items():
+                    # If the cognitive bias is reported as present, return it (no additional threshold here)
+                    if info.get("present", True) or info.get("severity", 0) > 0:
+                        return {bias_name: info}, bias_name
+
+    # Subjectivity fallback
+    if "subjectivity_bias" in biases:
+        sb = biases["subjectivity_bias"]
+        if sb.get("present") and sb.get("severity", 0) >= subjectivity_threshold:
+            return {"subjectivity_bias": sb}, "subjectivity_bias"
+
+    return {}, None
+
 
 #Identify all biases in the prompt
 def identify_biases(phrase: str, is_prompt: bool) -> dict:
@@ -125,7 +135,6 @@ def identify_biases(phrase: str, is_prompt: bool) -> dict:
     subjectivity_threshold = params.get("subjectivity_threshold", 0.5)
     cognitive_bias_threshold = params.get("cognitive_bias_threshold", 0.6)
 
-    # Check for toxicity bias
     toxicity_score = identify_implicit_toxicity_biases(phrase)
     detoxify_score = identify_general_toxicity_biases(phrase)
     subjectivity_score = identify_subjectivity(phrase)
@@ -144,7 +153,6 @@ def identify_biases(phrase: str, is_prompt: bool) -> dict:
         for bias_name, info in cb.items():
             if info["severity"] > cognitive_bias_threshold:
                 biases["cognitive_biases"].append({bias_name: info})
-    print("Detected biases:", biases)
     bias, bias_type =  aggregate_biases(biases, phrase)
     if bias_type is None:
        return None

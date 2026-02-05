@@ -4,5 +4,6 @@
     "detoxify_threshold": 0.5,
     "detoxify_min_threshold": 0.2,
     "subjectivity_threshold": 0.5,
-    "cognitive_bias_threshold": 0.6
+    "cognitive_bias_threshold": 0.6,
+    "explainability_threshold": 0.6
 }
