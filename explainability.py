@@ -9,7 +9,7 @@ from transformers_interpret import SequenceClassificationExplainer
 from textblob import TextBlob
 from detoxify import Detoxify
 from functools import partial
-
+import json
 
 #HateBERT (Toxigen)
 def toxigen_proba(texts):
@@ -90,8 +90,6 @@ def predict_subjectivity_with_shap(texts):
     return np.array([TextBlob(t).sentiment.subjectivity if t else 0.0 for t in texts])
 
 
-#Detoxify
-import numpy as np
 
 # Detoxify label-to-index mapping
 DETOXIFY_LABELS = {
@@ -172,10 +170,6 @@ def explain_detoxify_with_shap(text, label):
         return np.array([])
 
 
-
-import numpy as np
-import json
-
 def extract_biased_tokens(raw_data):
     """
     Extracts tokens by aggregating available XAI tools (LIME, SHAP, TI).
@@ -247,7 +241,6 @@ def extract_biased_tokens(raw_data):
             relative_score = (avg_score - min_score) / (max_score - min_score)
         else:
             relative_score = 1.0
-        
         if relative_score >= threshold:
             final_targets.append({
                 "word": token,
@@ -277,13 +270,15 @@ def explain_bias(bias, bias_type, phrase):
         explanations[bias_type] = {}
         explanations[bias_type]["lime"] = explain_subjectivity_with_lime(phrase)
         explanations[bias_type]["shap"] = predict_subjectivity_with_shap(phrase)
-    elif bias_type in ["anchoring", "framing", "stereotyping", "false_premises", "confirmation_seeking"]:
-        explanations[bias_type] = {}
-        explanations[bias_type] = bias[bias_type]["details"]
-        return bias_type, bias[bias_type], bias[bias_type]["details"]
-
+    elif bias_type.lower() in ["anchoring", "framing", "stereotyping", "false_premises", "confirmation_seeking"]:
+        # For cognitive biases, we currently do not have specific explainability methods implemented.
+        return bias_type, bias[bias_type], bias[bias_type].get("details", "No explanation available.")
+    else:
+        return bias_type, None, "No explainability method implemented for this bias type."
+    
     biased_tokens = extract_biased_tokens(explanations[bias_type])
 
+    explanation_str = None
     # Construct the natural language explanation
     if len(biased_tokens) > 1:
         explanation_str = f"This term is exhibiting **{bias_type}**."

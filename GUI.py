@@ -4,47 +4,60 @@ import re
 from bias_detection import identify_biases
 from bias_mitigation import sanitize_prompt
 from utils import generate_llm_response
-cognitive_biases = ["anchoring", "framing", "stereotyping", "false_premises", "confirmation_seeking"]
+
+cognitive_biases = ["anchoring", "framing", "stereotyping", "confirmation_seeking"]
+
 # ==========================================
 # 2. HELPER: TEXT PROCESSING FOR UI
 # ==========================================
 
 def format_highlight_data(text, biased_tokens, bias_type):
-    print(biased_tokens)
-    print(f"Formatting highlight data for bias type: {bias_type} with tokens: {biased_tokens['problematic_phrases'] if bias_type in cognitive_biases else biased_tokens}")
+    
+    print(f"Formatting highlight data for bias type: {bias_type} with tokens: {biased_tokens}\n")
 
     """
     Converts text and token list into Gradio HighlightedText format:
     [(substring, label), (substring, None), ...]
     """
+    
     if not biased_tokens:
         return [(text, None)]
     
-    
-
     # Sort tokens by their position in text to handle them in order
     # Note: A real implementation needs start/end indices. 
     # Here we simply split by space for the demo.
     words = text.split(" ")
     highlighted_output = []
+    
     if bias_type in cognitive_biases:
-        biased_words_map = {t.lower(): t for p in biased_tokens['problematic_phrases'] for t in p.split(" ")}
-    else:   
-        biased_words_map = {t['word'].lower(): t for t in biased_tokens}
+        # For cognitive biases: biased_tokens is a dict with 'problematic_phrases' key
+        if isinstance(biased_tokens, dict) and 'problematic_phrases' in biased_tokens:
+            phrases = biased_tokens['problematic_phrases']
+            # Build a map of individual words from phrases
+            biased_words_map = {t.lower(): t for p in phrases for t in p.split(" ")}
+        else:
+            biased_words_map = {}
+    else:
+        # For toxicity/detoxify: biased_tokens is a list of dicts with 'word' key
+        biased_words_map = {t['word'].lower(): t for t in biased_tokens if isinstance(t, dict) and 'word' in t}
+    
     for word in words:
         clean_word = word.strip(".,!?").lower()
         if clean_word in biased_words_map:
             if bias_type in cognitive_biases:
-                score_label = biased_tokens['severity']
-                highlighted_output.append((word + " ", f"Score: {score_label}"))
+                # Use severity from the full biased_tokens dict
+                severity = biased_tokens.get('severity', 'N/A')
+                highlighted_output.append((word + " ", severity))
             else:
                 # It's a biased word, mark it with the bias score
-                score_label = str(biased_words_map[clean_word]['abs_intensity'])
-                highlighted_output.append((word + " ", f"Score: {score_label}"))
+                token_obj = biased_words_map[clean_word]
+                score_label = str(token_obj.get('abs_intensity', token_obj.get('score', 'N/A')))
+                highlighted_output.append((word + " ", score_label))
         else:
             # Normal word
             highlighted_output.append((word + " ", None))   
     return highlighted_output
+
 
 # ==========================================
 # 3. GRADIO UI LOGIC
@@ -68,7 +81,7 @@ with gr.Blocks(title="Bias Guardrail") as demo:
     state_global_expl = gr.State("")  # NEW
 
     with gr.Row():
-        gr.Markdown("## 🛡️ LLM Guardrail & Bias Mitigation Dashboard")
+        gr.Markdown("## 🛡️ MICHA Guardrail & Bias Mitigation Dashboard")
 
     with gr.Row(equal_height=True):
         
@@ -97,6 +110,7 @@ with gr.Blocks(title="Bias Guardrail") as demo:
                 label="Analyzed Prompt",
                 combine_adjacent=True,
                 show_legend=False,
+                show_label = False,
                 color_map={"Score": "red"}
             )
             
@@ -110,12 +124,18 @@ with gr.Blocks(title="Bias Guardrail") as demo:
             
             # Mitigation Section
             with gr.Group():
-                gr.Markdown("### 🛠️ Mitigation Strategy")
-                suggestion_box = gr.Textbox(label="Suggested Rewrite", interactive=False)
-                
+                gr.Markdown("### 🛠️ Suggested Correction")
+                # 1. CHANGE: Set interactive=True so the user can type in it
+                suggestion_box = gr.Textbox(
+                    label="Suggested Rewrite (Editable)", 
+                    interactive=True,
+                    placeholder="Modify the suggested rewrite here..."
+                )
+    
                 with gr.Row():
                     cancel_btn = gr.Button("Ignore", variant="secondary")
-                    accept_btn = gr.Button("✅ Accept Correction", variant="primary")
+                    # 2. CHANGE: Rename for clarity
+                    apply_btn = gr.Button("✅ Send Prompt", variant="primary")
 
     # ==========================================
     # 4. EVENT HANDLERS
@@ -123,23 +143,31 @@ with gr.Blocks(title="Bias Guardrail") as demo:
 
     def on_submit(user_input, history):
         """
-        1. User submits -> Run Identity Bias
+        1. User submits -> Run Identify Bias
         2. If Bias -> Open Panel, don't generate LLM response yet (or generate with warning)
         3. If No Bias -> Generate LLM response normally
         """
         if not user_input:
-            return history, gr.update(visible=False), [], "", "", {}, "", ""
+            return history, gr.update(visible=False), [], "", "", [], {}, "", "", "", ""
 
         # 1. Check for bias
-        bias_type, tokens, global_expl = identify_biases(user_input, is_prompt=True)
+        result = identify_biases(user_input, is_prompt=True)
+        
+        # Handle None or all-None tuple returns
+        if result is None or (isinstance(result, tuple) and all(v is None for v in result)):
+            bias_type, tokens, global_expl = None, [], ""
+        else:
+            bias_type, tokens, global_expl = result
+        
         print(bias_type, tokens, global_expl)
+        
         # Append user message to history
         new_history = history + [{"role": "user", "content": user_input}]
 
         if bias_type:
             # BIAS FOUND: Trigger the guardrail UI
-            highlighted_data = format_highlight_data(user_input, tokens, bias_type)
-            suggested_text = sanitize_prompt(user_input, tokens, bias_type)
+            highlighted_data = format_highlight_data(user_input, tokens, bias_type, )
+            suggested_text = sanitize_prompt(user_input, bias_type , tokens)
             llm_response = generate_llm_response(user_input)
             new_history.append({"role": "assistant", "content": llm_response})
             
@@ -168,7 +196,21 @@ with gr.Blocks(title="Bias Guardrail") as demo:
                 "",                 # NEW: clear bias_type
                 ""                  # NEW: clear global_expl
             )
+        
 
+    def send_edited_correction(edited_text, history):
+        """
+        Takes the manually edited text from the suggestion box,
+        removes the 'bad' turn, and submits the new version.
+        """
+        # Remove the last user prompt and the last assistant warning
+        # history looks like: [... {user}, {assistant_with_alert}]
+        new_history = history[:-2] if len(history) >= 2 else []
+        
+        # We call your process_prompt logic again with the NEW text
+        # This ensures the new prompt is also audited for safety
+        return process_prompt(edited_text, new_history)
+    
     def on_select_token(evt: gr.SelectData, current_tokens, bias_type, global_expl):
         """Updates details when clicking highlighted text"""
         # evt.value is a list: [text, label]
@@ -207,43 +249,45 @@ with gr.Blocks(title="Bias Guardrail") as demo:
         
         # Handle cognitive biases
         if bias_type in cognitive_biases:
-            phrases = current_tokens.get('problematic_phrases', [])
-            found = next((p for p in phrases if p.lower() == selected_word), None)
-            if found:
-                return (
-                    {"term": found, "type": "Cognitive Bias", "severity": current_tokens.get('severity', 'N/A')},
-                    f"**Term:** {found}\n\n**Type:** Cognitive Bias\n\n**Severity:** {current_tokens.get('severity', 'N/A')}\n\n**Details:** {global_expl}"
-                )
-            return ({}, "No details found.")
+            # For cognitive biases, just show the global explanation
+            # No need to match individual words
+            return (
+                {
+                    "type": "Cognitive Bias", 
+                    "bias_type": bias_type,
+                    "severity": current_tokens.get('severity', 'N/A') if isinstance(current_tokens, dict) else 'N/A'
+                },
+                f"**Bias Type:** {bias_type.replace('_', ' ').title()}\n\n**Details:** {global_expl}"
+            )
         else:
-            # Toxicity/detoxify
-            found = next((t for t in current_tokens if t['word'].lower() == selected_word), None)
-            if found:
-                return (
-                    {"word": found['word'], "score": found.get('score', 'N/A')},
-                    f"**Word:** {found['word']}\n\n**Score:** {found.get('score', 'N/A')}\n\n**Reason:** {global_expl}"
-                )
+            # Toxicity/detoxify: current_tokens is a list of dicts with 'word' and 'score'
+            if isinstance(current_tokens, list):
+                found = next((t for t in current_tokens if isinstance(t, dict) and t.get('word', '').lower() == selected_word), None)
+                if found:
+                    return (
+                        {"word": found.get('word', ''), "score": found.get('score', found.get('abs_intensity', 'N/A'))},
+                        f"**Word:** {found.get('word', '')}\n\n**Score:** {found.get('score', found.get('abs_intensity', 'N/A'))}\n\n**Reason:** {global_expl}"
+                    )
             return ({}, "No details found.")
 
     def on_accept_mitigation(suggested_prompt, history):
         """
         User accepts the fix.
-        1. Replace last user message in history with new prompt.
-        2. Regenerate LLM response.
-        3. Hide panel.
+        1. Keep the original biased exchange in history (for context)
+        2. Add the corrected prompt as a new turn
+        3. Generate new response
+        4. Hide panel.
         """
-        # Remove the last exchange (old biased prompt and old response)
-        # Note: In a real app, you might want to keep a record, but here we "Fix" it.
-        history_pruned = history[:-2] 
+        # Keep the full history — don't remove anything
         
-        # Add corrected prompt
-        history_pruned.append({"role": "user", "content": suggested_prompt})
+        # Add corrected prompt with a marker
+        history.append({"role": "user", "content": f"✅ **[Corrected]** {suggested_prompt}"})
         
         # Generate new response
         new_response = generate_llm_response(suggested_prompt)
-        history_pruned.append({"role": "assistant", "content": new_response})
+        history.append({"role": "assistant", "content": new_response})
         
-        return history_pruned, gr.update(visible=False)
+        return history, gr.update(visible=False)
 
     def on_ignore():
         return gr.update(visible=False)
@@ -262,8 +306,8 @@ with gr.Blocks(title="Bias Guardrail") as demo:
             selected_word_info,
             explanation_text,
             suggestion_box,
-            state_bias_type,        # NEW
-            state_global_expl       # NEW
+            state_bias_type,    
+            state_global_expl      
         ]
     ).then(lambda: "", None, msg)
     
@@ -281,16 +325,15 @@ with gr.Blocks(title="Bias Guardrail") as demo:
         outputs=[selected_word_info, explanation_text]
     )
 
-    # Accept Correction Button
-    accept_btn.click(
+    # Accept Correction Button or modified prompt submission
+    apply_btn.click(
         on_accept_mitigation,
-        inputs=[state_mitigated_prompt, chatbot],
-        outputs=[chatbot, guardrail_panel]
+        inputs=[suggestion_box, chatbot],
+        outputs=[chatbot, guardrail_panel]        
     )
-    
     # Ignore Button
     cancel_btn.click(on_ignore, inputs=None, outputs=guardrail_panel)
 
 # Launch
 if __name__ == "__main__":
-    demo.launch(theme=theme)
+    demo.launch(theme=theme, share = True)
