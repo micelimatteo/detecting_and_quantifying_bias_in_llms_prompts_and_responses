@@ -12,50 +12,53 @@ cognitive_biases = ["anchoring", "framing", "stereotyping", "confirmation_seekin
 # ==========================================
 
 def format_highlight_data(text, biased_tokens, bias_type):
-    
+
     print(f"Formatting highlight data for bias type: {bias_type} with tokens: {biased_tokens}\n")
 
     """
     Converts text and token list into Gradio HighlightedText format:
-    [(substring, label), (substring, None), ...]
+    [(substring, "Score"), (substring, None), ...]
+
+    A constant "Score" label is used for every flagged word — matching
+    color_map={"Score": "red"} on the HighlightedText component — rather
+    than the per-token numeric score. Gradio's color_map keys on the exact
+    label string, so emitting a different label per token (e.g. "0.823")
+    never matched "Score" and rendered with no highlight color at all.
+    The actual score is still available on click via state_biased_tokens
+    in on_select_token_wrapper, so nothing is lost by not embedding it here.
     """
-    
+
     if not biased_tokens:
         return [(text, None)]
-    
-    # Sort tokens by their position in text to handle them in order
-    # Note: A real implementation needs start/end indices. 
-    # Here we simply split by space for the demo.
+
     words = text.split(" ")
     highlighted_output = []
-    
+
+    def normalize(w):
+        return w.strip(".,!?;:\"'").lower()
+
     if bias_type in cognitive_biases:
-        # For cognitive biases: biased_tokens is a dict with 'problematic_phrases' key
-        if isinstance(biased_tokens, dict) and 'problematic_phrases' in biased_tokens:
-            phrases = biased_tokens['problematic_phrases']
-            # Build a map of individual words from phrases
-            biased_words_map = {t.lower(): t for p in phrases for t in p.split(" ")}
-        else:
-            biased_words_map = {}
+        # explain_bias() returns the problematic phrases directly as a
+        # list[str] for cognitive biases (explainability.py:293) — not a
+        # dict with a 'problematic_phrases' key. The previous isinstance(...,
+        # dict) check was always False, so biased_words_map was always {}
+        # and cognitive-bias highlighting never matched anything.
+        phrases = biased_tokens if isinstance(biased_tokens, list) else []
+        biased_words_map = {
+            normalize(w): True
+            for phrase in phrases for w in str(phrase).split(" ") if normalize(w)
+        }
     else:
-        # For toxicity/detoxify: biased_tokens is a list of dicts with 'word' key
-        biased_words_map = {t['word'].lower(): t for t in biased_tokens if isinstance(t, dict) and 'word' in t}
-    
+        # Toxicity/detoxify: biased_tokens is a list of dicts with a 'word' key
+        biased_words_map = {
+            normalize(t['word']): t for t in biased_tokens if isinstance(t, dict) and 'word' in t
+        }
+
     for word in words:
-        clean_word = word.strip(".,!?").lower()
-        if clean_word in biased_words_map:
-            if bias_type in cognitive_biases:
-                # Use severity from the full biased_tokens dict
-                severity = biased_tokens.get('severity', 'N/A')
-                highlighted_output.append((word + " ", severity))
-            else:
-                # It's a biased word, mark it with the bias score
-                token_obj = biased_words_map[clean_word]
-                score_label = str(token_obj.get('abs_intensity', token_obj.get('score', 'N/A')))
-                highlighted_output.append((word + " ", score_label))
+        if normalize(word) in biased_words_map:
+            highlighted_output.append((word + " ", "Score"))
         else:
-            # Normal word
-            highlighted_output.append((word + " ", None))   
+            highlighted_output.append((word + " ", None))
     return highlighted_output
 
 
@@ -81,7 +84,7 @@ with gr.Blocks(title="Bias Guardrail") as demo:
     state_global_expl = gr.State("")  # NEW
 
     with gr.Row():
-        gr.Markdown("## 🛡️ MICHA Guardrail & Bias Mitigation Dashboard")
+        gr.Markdown("## 🛡️ Bias Identification and Mitigation Dashboard")
 
     with gr.Row(equal_height=True):
         

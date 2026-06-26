@@ -3,7 +3,7 @@
     "toxigen_min_threshold": 0.2,
     "detoxify_threshold": 0.5,
     "detoxify_min_threshold": 0.2,
-    "subjectivity_threshold": 0.5,
+    "subjectivity_threshold": 0.3,
     "cognitive_bias_threshold": 0.5,
     "explainability_threshold": 0.6
 }

@@ -5,7 +5,7 @@ def sanitize_prompt(prompt: str, biases: str, tokens) -> str:
     Sanitize the prompt by removing or replacing any problematic phrases
     identified in the bias detection step.
     """
-    prompt = f"""This prompt {prompt} contains this list of biases: {biases}. Those biases appear in this sequence of words: {tokens}. Please rewrite the PROMPT to eliminate these biases while preserving its original intent. Respond only in the format of 'Rewritten Prompt: <your rewritten prompt here>'. Do not write any additional commentary or explanation."""
+    prompt = f"""This prompt {prompt} contains this list of biases: {biases}. Please rewrite the prompt to eliminate these biases while preserving its original intent. Respond only in the format of 'Rewritten Prompt: <your rewritten prompt here>'. Do not write any additional commentary or explanation."""
     
     response = generate_llm_response(prompt)
     rewritten_prefix = "Rewritten Prompt:"

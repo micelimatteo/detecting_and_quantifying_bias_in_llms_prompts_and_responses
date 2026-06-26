@@ -11,6 +11,7 @@ from detoxify import Detoxify
 from functools import partial
 import json
 
+
 #HateBERT (Toxigen)
 def toxigen_proba(texts):
     model_name = "tomh/toxigen_hatebert"
@@ -170,83 +171,100 @@ def explain_detoxify_with_shap(text, label):
         return np.array([])
 
 
+
+def normalize_tool_scores(scores_dict):
+    """
+    Helper to apply Min-Max scaling to a dictionary of {token: absolute_score}.
+    Ensures each tool's output is in the range [0, 1].
+    """
+    if not scores_dict:
+        return {}
+    
+    vals = list(scores_dict.values())
+    max_v = max(vals)
+    min_v = min(vals)
+    
+    # Avoid division by zero if all scores are identical
+    if max_v == min_v:
+        return {k: 1.0 for k in scores_dict.keys()}
+    
+    return {k: (v - min_v) / (max_v - min_v) for k, v in scores_dict.items()}
+
 def extract_biased_tokens(raw_data):
-    """
-    Extracts tokens by aggregating available XAI tools (LIME, SHAP, TI).
-    Uses Min-Max scaling to ensure biased tokens are identified even 
-    when absolute scores are diluted in high-density phrases.
-    """
-    # Load threshold from params
+    # Load threshold
     with open("params.json", "r") as f:
         params = json.load(f)
     threshold = params.get("explainability_threshold", 0.6)
 
-    token_scores = {} # Format: {token: [score1, score2, ...]}
-    
+    # Temporary storage for tool-specific absolute scores
+    lime_raw = {}
+    shap_raw = {}
+    ti_raw = {}
+
     # --- 1. Extract LIME ---
     if 'lime' in raw_data and raw_data['lime']:
         for word, score in raw_data['lime']:
             token = str(word).strip().lower()
-            token_scores.setdefault(token, []).append(abs(float(score)))
+            lime_raw[token] = abs(float(score))
 
     # --- 2. Extract SHAP ---
     if 'shap' in raw_data and raw_data['shap'] is not None:
         try:
+            # Simplification for your logic: extract absolute values into shap_raw
+            # (Assuming standard SHAP Explanation object or array)
             shap_vals = raw_data['shap']
-            # Check if it's a numpy array
-            if isinstance(shap_vals, np.ndarray):
-                if shap_vals.size > 0:
-                    # Flatten and use as token scores
-                    for i, val in enumerate(shap_vals.flatten()):
-                        token = f"token_{i}"
-                        token_scores.setdefault(token, []).append(abs(float(val)))
-            else:
-                # Try to extract from Explanation object
-                if hasattr(shap_vals, 'values') and hasattr(shap_vals, 'data'):
-                    shap_arr = shap_vals.values[0] if shap_vals.values.size > 0 else np.array([])
-                    shap_data = shap_vals.data[0] if shap_vals.data.size > 0 else []
-                    for token, val in zip(shap_data, shap_arr):
-                        t_clean = str(token).strip().lower()
-                        if t_clean:
-                            token_scores.setdefault(t_clean, []).append(abs(float(val)))
-        except (IndexError, AttributeError, TypeError, ValueError) as e:
-            print(f"Error extracting SHAP: {e}")
-            pass
+            if hasattr(shap_vals, 'values') and hasattr(shap_vals, 'data'):
+                # Handle cases where SHAP might return multi-class arrays
+                s_vals = shap_vals.values[0] if len(shap_vals.values.shape) > 1 else shap_vals.values
+                s_data = shap_vals.data[0] if len(shap_vals.data.shape) > 1 else shap_vals.data
+                for token, val in zip(s_data, s_vals):
+                    t_clean = str(token).strip().lower()
+                    if t_clean: shap_raw[t_clean] = abs(float(val))
+        except Exception as e:
+            print(f"SHAP extraction error: {e}")
 
     # --- 3. Extract Transformers Interpret ---
-    if 'transformers_interpret' in raw_data and raw_data['transformers_interpret'] is not None:
-        try:
-            ti_data = raw_data['transformers_interpret']
-            if isinstance(ti_data, (list, tuple)):
-                for token, score in ti_data:
-                    t_clean = str(token).strip().lower()
-                    if t_clean not in ['[cls]', '[sep]', '<s>', '</s>']:
-                        token_scores.setdefault(t_clean, []).append(abs(float(score)))
-        except (IndexError, AttributeError, TypeError, ValueError):
-            pass
+    if 'transformers_interpret' in raw_data and raw_data['transformers_interpret']:
+        for token, score in raw_data['transformers_interpret']:
+            t_clean = str(token).strip().lower()
+            if t_clean not in ['[cls]', '[sep]', '<s>', '</s>']:
+                ti_raw[t_clean] = abs(float(score))
 
-    if not token_scores:
+    # --- 4. PRE-AGGREGATION NORMALIZATION (The Crucial Step) ---
+    # This turns every tool into a [0, 1] range individually.
+    lime_norm = normalize_tool_scores(lime_raw)
+    shap_norm = normalize_tool_scores(shap_raw)
+    ti_norm = normalize_tool_scores(ti_raw)
+
+    # --- 5. ENSEMBLE AVERAGING ---
+    # Combine normalized scores
+    ensemble_scores = {}
+    tools_count = {}
+
+    for d in [lime_norm, shap_norm, ti_norm]:
+        for token, norm_score in d.items():
+            ensemble_scores[token] = ensemble_scores.get(token, 0) + norm_score
+            tools_count[token] = tools_count.get(token, 0) + 1
+
+    if not ensemble_scores:
         return []
 
-    # --- 4. Mean Aggregation ---
-    mean_scores = {token: sum(scores)/len(scores) for token, scores in token_scores.items()}
-    
-    # --- 5. Relative Normalization ---
-    max_score = max(mean_scores.values())
-    min_score = min(mean_scores.values())
-    
+    mean_scores = {t: ensemble_scores[t] / tools_count[t] for t in ensemble_scores}
+
+    # --- 6. FINAL RELATIVE SCALING (For UI consistency) ---
+    max_avg = max(mean_scores.values())
+    min_avg = min(mean_scores.values())
+
     final_targets = []
     for token, avg_score in mean_scores.items():
-        if max_score > min_score:
-            relative_score = (avg_score - min_score) / (max_score - min_score)
-        else:
-            relative_score = 1.0
-        if relative_score >= threshold:
+        # Final stretch to ensure the 'most biased' token is 1.0
+        rel_score = (avg_score - min_avg) / (max_avg - min_avg) if max_avg > min_avg else 1.0
+        
+        if rel_score >= threshold:
             final_targets.append({
                 "word": token,
-                "score": round(relative_score, 3),
-                "abs_intensity": round(avg_score, 3),
-                "tools_detected": len(token_scores[token])
+                "score": round(rel_score, 3),
+                "tools_detected": tools_count[token]
             })
 
     return sorted(final_targets, key=lambda x: x['score'], reverse=True)
@@ -272,7 +290,7 @@ def explain_bias(bias, bias_type, phrase):
         explanations[bias_type]["shap"] = predict_subjectivity_with_shap(phrase)
     elif bias_type.lower() in ["anchoring", "framing", "stereotyping", "false_premises", "confirmation_seeking"]:
         # For cognitive biases, we currently do not have specific explainability methods implemented.
-        return bias_type, bias[bias_type], bias[bias_type].get("details", "No explanation available.")
+        return bias_type, bias[bias_type]['problematic_phrases'], bias[bias_type].get("details", "No explanation available.")
     else:
         return bias_type, None, "No explainability method implemented for this bias type."
     
