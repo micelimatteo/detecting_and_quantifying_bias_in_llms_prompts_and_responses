@@ -288,11 +288,16 @@ def explain_bias(bias, bias_type, phrase):
         explanations[bias_type] = {}
         explanations[bias_type]["lime"] = explain_subjectivity_with_lime(phrase)
         explanations[bias_type]["shap"] = predict_subjectivity_with_shap(phrase)
-    elif bias_type.lower() in ["anchoring", "framing", "stereotyping", "false_premises", "confirmation_seeking"]:
-        # For cognitive biases, we currently do not have specific explainability methods implemented.
-        return bias_type, bias[bias_type]['problematic_phrases'], bias[bias_type].get("details", "No explanation available.")
     else:
-        return bias_type, None, "No explainability method implemented for this bias type."
+        # All non-toxicity types are LLM-generated cognitive biases.
+        # Use .get() with a fallback to the first value to guard against
+        # key mismatches when the LLM returns a capitalized or spaced variant
+        # of the bias name (e.g. "Framing Bias" instead of "framing").
+        info = bias.get(bias_type) or next(iter(bias.values()), {})
+        return bias_type, {
+            "problematic_phrases": info.get("problematic_phrases", []),
+            "severity": info.get("severity", "N/A")
+        }, info.get("details", "No explanation available.")
     
     biased_tokens = extract_biased_tokens(explanations[bias_type])
 

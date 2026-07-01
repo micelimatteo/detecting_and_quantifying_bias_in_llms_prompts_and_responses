@@ -5,7 +5,7 @@ from bias_detection import identify_biases
 from bias_mitigation import sanitize_prompt
 from utils import generate_llm_response
 
-cognitive_biases = ["anchoring", "framing", "stereotyping", "confirmation_seeking"]
+cognitive_biases = ["anchoring", "framing", "stereotyping", "confirmation_seeking", "false_premises"]
 
 # ==========================================
 # 2. HELPER: TEXT PROCESSING FOR UI
@@ -43,7 +43,10 @@ def format_highlight_data(text, biased_tokens, bias_type):
         # dict with a 'problematic_phrases' key. The previous isinstance(...,
         # dict) check was always False, so biased_words_map was always {}
         # and cognitive-bias highlighting never matched anything.
-        phrases = biased_tokens if isinstance(biased_tokens, list) else []
+        if isinstance(biased_tokens, dict):
+            phrases = biased_tokens.get("problematic_phrases", [])
+        else:
+            phrases = biased_tokens if isinstance(biased_tokens, list) else []
         biased_words_map = {
             normalize(w): True
             for phrase in phrases for w in str(phrase).split(" ") if normalize(w)

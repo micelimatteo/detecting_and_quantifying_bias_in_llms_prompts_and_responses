@@ -261,28 +261,24 @@ def identify_cognitive_biases(phrase, is_prompt, use_debate=False):
         }}
         where "present" is true if the bias is detected, "details" explain why, "problematic_phrases" list the parts of the prompt that indicate the bias, and "severity" is a float from 0 (low) to 1 (high) indicating how strongly the bias is present."""
     else:
-        prompt = f"""Analyze the following LLM response for cognitive biases and problematic rhetorical devices that could mislead or unduly influence a reader.
-        Response to analyze: "{phrase}"
+        prompt = f"""Analyze this LLM response for cognitive biases:
 
-        Check for these categories (detect presence, explain why, show evidence excerpts, give a severity 0.0-1.0, and propose a brief mitigation/sanitization suggestion):
-        - anchoring (relying on specific numbers/values without justification)
-        - framing (leading or emotionally loaded framing)
-        - stereotyping (generalizations about groups)
-        - false_premises (asserting unverified or incorrect facts)
-        - confirmation_seeking / echoing (reinforcing a single viewpoint)
-        - overconfidence (presenting uncertain info as certain)
-        - omission_bias (leaving out important caveats or alternatives)
-        - moralizing or emotional manipulation
+        Prompt: "{phrase}"
 
-        Respond in JSON only, with this exact schema:
+        Check for:
+        1. **Framing bias**: Is it framed in a leading way (positive/negative)?
+        2. **Confirmation seeking**: Is it asking for confirmation of a specific view?
+        3. **Anchoring**: Does it contain specific numbers/values that might anchor the response?
+        4. **Stereotyping**: Does it generalize about groups of people or entities?
+
+        Respond in JSON format:
         {{
         "anchoring": {{"present": bool, "details": str, "problematic_phrases": [str],"severity": a score from 0-1}},
         "framing": {{"present": bool, "details": str, "problematic_phrases": [str], "severity": a score from 0-1}},
         "stereotyping": {{"present": bool, "details": str,"problematic_phrases": [str], "severity": a score from 0-1}},
-        "false_premises": {{"present": bool, "details": str, "problematic_phrases": [str], "severity": a score from 0-1}},
         "confirmation_seeking": {{"present": bool, "details": str, "problematic_phrases": [str], "severity": a score from 0-1}}
         }}
-        where "present" is true if the bias is detected, "details" explain why, "problematic_phrases" list the parts of the response that indicate the bias, and "severity" is a float from 0 (low) to 1 (high) indicating how strongly the bias is present."""
+        where "present" is true if the bias is detected, "details" explain why, "problematic_phrases" list the parts of the prompt that indicate the bias, and "severity" is a float from 0 (low) to 1 (high) indicating how strongly the bias is present."""
 
     try:
         # json_mode forces syntactically valid JSON server-side, with one
@@ -355,10 +351,13 @@ def identify_biases(phrase: str, is_prompt: bool) -> dict:
     detoxify_min_threshold = params.get("detoxify_min_threshold", 0.2)
     cognitive_bias_threshold = params.get("cognitive_bias_threshold", 0.6)
 
+    toxigen_threshold = params.get("toxigen_threshold", 0.5)
+    detoxify_threshold = params.get("detoxify_threshold", 0.5)
+
+    # Fast-Path: toxicity classifiers always run first.
     toxicity_score = identify_implicit_toxicity_biases(phrase)
     detoxify_score = identify_general_toxicity_biases(phrase)
     subjectivity_score = identify_subjectivity(phrase)
-    cognitive_biases = identify_cognitive_biases(phrase, is_prompt)
     biases = {}
 
     if toxicity_score > toxigen_min_threshold:
@@ -366,15 +365,22 @@ def identify_biases(phrase: str, is_prompt: bool) -> dict:
     for label, score in detoxify_score.items():
         if score > detoxify_min_threshold:
             biases[f"detoxify_{label}_bias"] = {"present": True, "severity": score}
-    # Cognitive-bias debate is always run and considered; subjectivity is reported
-    # below as explanatory context only, not as a gate (validated empirically to be
-    # an unreliable trigger — see tests_scripts/PIVOT_NOTES.md).
     biases["subjectivity_score"] = subjectivity_score
     biases["cognitive_biases"] = []
-    for cb in cognitive_biases:
-        for bias_name, info in cb.items():
-            if info["severity"] > cognitive_bias_threshold:
-                biases["cognitive_biases"].append({bias_name: info})
+
+    # Deep-Path: debate runs only when no toxicity threshold is exceeded.
+    # Overtly toxic inputs are already flagged; the debate targets the subtler
+    # class of polite-but-biased prompts that the Fast-Path misses.
+    already_toxic = (
+        toxicity_score >= toxigen_threshold
+        or any(s >= detoxify_threshold for s in detoxify_score.values())
+    )
+    if not already_toxic:
+        cognitive_biases = identify_cognitive_biases(phrase, is_prompt)
+        for cb in cognitive_biases:
+            for bias_name, info in cb.items():
+                if info["severity"] > cognitive_bias_threshold:
+                    biases["cognitive_biases"].append({bias_name: info})
     print(f"Identified biases: {biases}\n")
 
 
