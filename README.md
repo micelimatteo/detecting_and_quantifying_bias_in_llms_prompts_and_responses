@@ -12,7 +12,7 @@ Guardrail framework for detecting toxicity and cognitive bias (framing, confirma
 ## Datasets
 
 Used for the formal evaluation:
-- **civil_comments** (`google/civil_comments`, HF) — toxicity baseline (Test 1); also the corpus Detoxify itself was trained on.
+- **civil_comments** (`google/civil_comments`, HF) — toxicity baseline (Test 1).
 - **RealToxicityPrompts** (`allenai/real-toxicity-prompts`, HF) — safety-leakage evaluation (Test 2).
 - **MindScope** (`https://github.com/mindhunter01/MindScope`) — cognitive bias detection and the subjectivity-gate validation (Test 3).
 
