@@ -2,6 +2,10 @@
 
 Guardrail framework for detecting toxicity and cognitive bias (framing, confirmation, anchoring, stereotyping) in LLM prompts/responses, combining fast content classifiers with an LLM-based multi-agent debate, plus an explainability layer (SHAP/LIME/Transformers Interpret) and a Gradio UI.
 
+## UI
+<img width="1355" height="726" alt="cognitive_bias_path_detection" src="https://github.com/user-attachments/assets/1de13fbd-c75f-43d9-b95c-1ce70ef286fa" />
+
+
 ## Layout
 
 - `bias_detection.py`, `bias_mitigation.py`, `explainability.py`, `utils.py`, `params.json` — core detection/mitigation/explainability pipeline and its configuration.
